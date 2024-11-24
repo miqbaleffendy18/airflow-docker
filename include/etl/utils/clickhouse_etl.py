@@ -19,23 +19,23 @@ def execute_query(clickhouse_credentials, query):
     clickhouse_engine.command(query)
     clickhouse_engine.close()
 
-def ingest_from_s3(clickhouse_credentials, db_name, table_name, load_path, aws_credentials, col_name):
+def ingest_from_s3(clickhouse_credentials, db_name, table_name, aws_credentials, col_name):
 
     access_key = aws_credentials['access_key']
     secret_key = aws_credentials['secret_key']
     region = aws_credentials['region']
+    load_path = f'https://etl-testing-iqbal.s3.{region}.amazonaws.com/clickhouse/TEMP_{db_name}_{table_name}.parquet/*'
 
     query = f"""
     INSERT INTO {db_name}.{table_name} ({col_name})
         SELECT * 
-        FROM s3(
+        FROM s3Cluster(
+            'default',
             '{load_path}',
             '{access_key}',
             '{secret_key}',
-            '{region}',
             'Parquet'
         )
     """
-    print(query)
     execute_query(clickhouse_credentials, query=query)
 

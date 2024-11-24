@@ -84,7 +84,7 @@ for index, row in df_init.iterrows():
     # Ingest from S3 to Clickhouse
     cols_name = list(df_columns['column_name'])
     curate_cols_name = ','.join([str(n) for n in cols_name])
-    ingest_from_s3(clickhouse_credentials, db_name=schema_source, table_name=table_source, load_path=unload_path, aws_credentials=aws_credentials, col_name=curate_cols_name)
+    ingest_from_s3(clickhouse_credentials, db_name=schema_source, table_name=table_source, aws_credentials=aws_credentials, col_name=curate_cols_name)
     print(f'Table {schema_source}.{table_source} Ingested to Clickhouse Successfully')
     
 
