@@ -27,6 +27,8 @@ aws_credentials = {
     'access_key': os.environ['AWS_ACCESS_KEY_ID'],
     'secret_key': os.environ['AWS_SECRET_ACCESS_KEY'],
     'region': os.environ['AWS_DEFAULT_REGION'],
+    'bucket_name': os.environ['AWS_BUCKET_NAME'],
+    'folder_name': os.environ['AWS_FOLDER_NAME']
 }
 
 query_init = os.environ.get("query")
@@ -75,7 +77,7 @@ for index, row in df_init.iterrows():
     results = snow_stream_extract(snow_credential=snow_credential, query=query, chunksize=50000)
 
     # Unload to S3
-    unload_path = f's3://etl-testing-iqbal/clickhouse/TEMP_{schema_source}_{table_source}.parquet/'
+    unload_path = f's3://{aws_credentials["bucket_name"]}/{aws_credentials["folder_name"]}/TEMP_{schema_source}_{table_source}.parquet/'
     wr.s3.delete_objects(unload_path)
     for result_item in results:
         unload_to_s3(unload_path=unload_path, df=result_item)

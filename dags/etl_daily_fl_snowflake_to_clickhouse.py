@@ -41,6 +41,8 @@ with dag:
             'AWS_ACCESS_KEY_ID': Variable.get("etl_aws_access_secret"),
             'AWS_SECRET_ACCESS_KEY': Variable.get("etl_aws_secret_key"),
             'AWS_DEFAULT_REGION': Variable.get("etl_aws_region"),
+            'AWS_BUCKET_NAME': Variable.get("etl_aws_clickhouse_bucket"),
+            'AWS_FOLDER_NAME': Variable.get("etl_aws_clickhouse_folder"),
             # clickhouse
             'clickhouse_host': Variable.get("etl_clickhouse_host"),
             'clickhouse_username': Variable.get("etl_clickhouse_username"),

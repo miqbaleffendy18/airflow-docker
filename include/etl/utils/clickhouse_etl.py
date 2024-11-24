@@ -24,7 +24,9 @@ def ingest_from_s3(clickhouse_credentials, db_name, table_name, aws_credentials,
     access_key = aws_credentials['access_key']
     secret_key = aws_credentials['secret_key']
     region = aws_credentials['region']
-    load_path = f'https://etl-testing-iqbal.s3.{region}.amazonaws.com/clickhouse/TEMP_{db_name}_{table_name}.parquet/*'
+    bucket_name = aws_credentials['bucket_name']
+    folder_name = aws_credentials['folder_name']
+    load_path = f'https://{bucket_name}.s3.{region}.amazonaws.com/{folder_name}/TEMP_{db_name}_{table_name}.parquet/*' #Clickhouse needs https protocol
 
     query = f"""
     INSERT INTO {db_name}.{table_name} ({col_name})
