@@ -1,6 +1,5 @@
 from utils.snow_etl_v2 import snow_extract, snow_stream_extract, unload_to_s3
 from utils.clickhouse_etl import execute_query, ingest_from_s3
-from sqlalchemy import text
 import awswrangler as wr
 import time
 import os

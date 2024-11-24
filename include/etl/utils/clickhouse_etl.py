@@ -1,7 +1,4 @@
-import pandas as pd
-# from sqlalchemy import create_engine, text
 import clickhouse_connect
-import os
 
 def db_connect(clickhouse_credentials):
     
