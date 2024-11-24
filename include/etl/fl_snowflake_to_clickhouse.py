@@ -39,7 +39,7 @@ for index, row in df_init.iterrows():
     table_source = row['s_table']
     sortkey = row['sortkey']
 
-    # Create table in Clickhouse
+    # Create table in Clickhouse, generate DDL from Snowflake information_schema
     query_columns = f"""
     WITH tables as (
     select
@@ -56,7 +56,7 @@ for index, row in df_init.iterrows():
     END AS COLUMNS,
     CASE WHEN IS_NULLABLE = 'NO' THEN 'NOT NULL' END IS_NULLABLE,
     ORDINAL_POSITION
-    from INFORMATION_SCHEMA.COLUMNS where TABLE_SCHEMA = '{schema_source}' and TABLE_NAME = '{table_source}')
+    from {db_source}.INFORMATION_SCHEMA.COLUMNS where TABLE_SCHEMA = '{schema_source}' and TABLE_NAME = '{table_source}')
     select concat(COLUMN_NAME_QUOTED,' ', COLUMNS,' ', COALESCE(IS_NULLABLE,'')) as COL, COLUMN_NAME from tables ORDER BY ordinal_position
     """
 
