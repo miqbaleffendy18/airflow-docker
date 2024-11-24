@@ -1,0 +1,19 @@
+###### Requirements with Version Specifiers ######`
+sqlalchemy<2.0
+pybase64
+numpy
+pandas~=2.1.4
+psycopg2-binary
+requests
+boto3
+awswrangler
+snowflake-connector-python
+snowflake-sqlalchemy
+clickhouse-connect
+httplib2
+oauth2client
+sendgrid
+tqdm
+pysftp
+gspread
+pyarrow

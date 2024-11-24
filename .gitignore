@@ -1,0 +1,4 @@
+venv
+include/etl/utils/__pycache__
+dags/__pycache__
+logs
