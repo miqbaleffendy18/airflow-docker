@@ -61,6 +61,10 @@ for index, row in df_init.iterrows():
     """
 
     df_columns = snow_extract(snow_credential=snow_credential, query=query_columns)
+    if df_columns.empty:
+        print(f"Model {schema_source}.{table_source} not found in config table. Skipping...")
+        continue
+
     cols_quoted = list(df_columns['col'])
     curate_cols = ','.join([str(n) for n in cols_quoted]) 
     drop_ddl = f'DROP TABLE IF EXISTS "{schema_source}"."{table_source}"'
