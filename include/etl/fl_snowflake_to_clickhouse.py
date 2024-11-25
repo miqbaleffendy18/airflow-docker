@@ -56,7 +56,8 @@ for index, row in df_init.iterrows():
     END AS COLUMNS,
     CASE WHEN IS_NULLABLE = 'NO' THEN 'NOT NULL' END IS_NULLABLE,
     ORDINAL_POSITION
-    from {db_source}.INFORMATION_SCHEMA.COLUMNS where TABLE_SCHEMA = '{schema_source}' and TABLE_NAME = '{table_source}')
+    from {db_source}.INFORMATION_SCHEMA.COLUMNS where TABLE_SCHEMA = '{schema_source}' and TABLE_NAME = '{table_source}'
+    AND TABLE_SCHEMA IN ('DBT_PROD', 'EVP_PROD', 'CORP_MART'))
     select concat(COLUMN_NAME_QUOTED,' ', COLUMNS,' ', COALESCE(IS_NULLABLE,'')) as COL, COLUMN_NAME from tables ORDER BY ordinal_position
     """
 
