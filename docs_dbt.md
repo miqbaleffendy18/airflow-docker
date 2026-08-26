@@ -197,7 +197,67 @@ Key points:
 
 ---
 
-## 6. Every fact table requires an `etl_date` column
+## 6. Post-hook hard-delete mechanism
+
+`delete+insert`/`is_incremental()` filters (§4, §5) handle rows that were *inserted or updated* upstream, but they can't detect rows that were **hard-deleted** at the source — a deleted source row simply stops showing up, it doesn't emit an "updated" signal the incremental filter can catch. To keep the fact table in sync, models pair their incremental filter with a `post_hook` that explicitly deletes any fact rows corresponding to source records that were hard-deleted, using a dedicated "deleted ids" tracking model.
+
+Example — [fact_order_evermos.sql:10-23](../models/fact/fact_evermos/fact_order_evermos.sql#L10-L23):
+
+```sql
+{{
+    config(
+        materialized='incremental',
+        unique_key='order_detail_id',
+        incremental_strategy='delete+insert',
+        tags = ['fact_edna'],
+        meta = {
+            'owner': ['iqbal.effendy@evermos.com']
+        },
+        post_hook = [
+            """
+            DELETE FROM {{ this }}
+            WHERE order_detail_id IN (
+                SELECT ord.order_detail_id FROM {{ this }} ord
+                JOIN {{ ref('evm_order_deleted') }} del
+                ON ord.order_detail_id = del.id AND del.remarks = 'order_detail_id'
+                UNION
+                SELECT ord.order_detail_id FROM {{ this }} ord
+                JOIN {{ ref('evm_order_deleted') }} del
+                ON ord.order_receipt_id = del.id AND del.remarks = 'order_receipt_id'
+            )
+            """
+        ]
+    )
+}}
+```
+
+`{{ ref('evm_order_deleted') }}` (`models/base/evermos/evm/evm_order_deleted.sql`) is the tracking model this depends on — it unions two source "deleted" tables into one `(id, deletedat, remarks)` feed, where `remarks` tags which id type each row's `id` refers to:
+
+```sql
+WITH order_detail_deleted AS (
+    SELECT orderdetailid as id, deletedat, 'order_detail_id' as remarks
+    FROM {{ source('evm_schema', 'order_detail_deleted') }}
+),
+order_receipt_deleted AS (
+    SELECT orderreceiptid as id, deletedat, 'order_receipt_id' as remarks
+    FROM {{ source('evm_schema', 'order_receipt_deleted') }}
+)
+SELECT id, deletedat, remarks FROM order_detail_deleted
+UNION ALL
+SELECT id, deletedat, remarks FROM order_receipt_deleted
+```
+
+Key points:
+
+- The `post_hook` runs **after** the model's main incremental insert/merge completes, as a plain `DELETE FROM {{ this }}` — it operates on the already-materialized table, not on the `SELECT` that builds it.
+- Because a fact grain can be deleted from more than one upstream angle (here, either the order detail itself was hard-deleted, or its parent order receipt was), the `WHERE` clause `UNION`s a check against each `remarks` value, joining `del.id` to the matching fact column (`order_detail_id` vs `order_receipt_id`) for that `remarks`.
+- This mirrors the population-CTE idea from §5 (branch per way the fact can be affected, `UNION`ed together) but applied to deletions instead of upserts, and executed as a hard `DELETE` post-hook instead of scoping a `SELECT`.
+- The tracking model (`evm_order_deleted`) itself is a simple `UNION ALL` over dedicated "deleted" source tables — this pattern assumes the upstream system captures hard deletes into its own log/table rather than expecting them to be inferred; without such a tracking source, hard deletes can't be detected from the "current state" source tables alone.
+- General shape to reuse for a new fact: for every source table backing the fact that has a corresponding "deleted ids" source, add a `post_hook` that joins `{{ this }}` against that tracking model on the relevant key and deletes matches.
+
+---
+
+## 7. Every fact table requires an `etl_date` column
 
 Every fact model must expose an `etl_date` column (typically `(CURRENT_TIMESTAMP + INTERVAL '7 hours')::TIMESTAMP AS etl_date`, stamped at build time — see §4). It serves two purposes:
 
@@ -234,7 +294,7 @@ Key points:
 
 ---
 
-## 7. Audit tables (`models/audit/audit_fact_edna.sql` & `models/audit/audit_dim_edna.sql`)
+## 8. Audit tables (`models/audit/audit_fact_edna.sql` & `models/audit/audit_dim_edna.sql`)
 
 Separate from the fact/dim models themselves, `models/audit/` holds a data-quality layer that continuously checks the new dbt models against expectations (or against the legacy tables they replaced). There are two levels: per-model audit checks, and two roll-up models that aggregate all of them into a single daily audit log.
 
@@ -347,5 +407,6 @@ Key points:
 | 3 | Partial refresh | `is_partial_refresh()` + self-join to `{{ this }}` | Selectively reprocess only rows whose value changed, gated by a var |
 | 4 | Incremental w/ 1-day offset | `MAX(etl_date) - INTERVAL '1 day'` filter on every source | Re-scan a 1-day buffer to catch late-arriving/updated rows |
 | 5 | Incremental population CTE | `*_population` CTE unioning direct + related-entity changes | Catch fact-grain changes triggered by a related/child entity, not just the base table |
-| 6 | Required `etl_date` column | Every fact model's `SELECT` list | Own incremental watermark, and the watermark downstream facts filter on when consuming this fact as a source |
-| 7 | Audit tables | `models/audit/audit_fact_*.sql`, `audit_fact_edna.sql`, `audit_dim_edna.sql` | Reconcile new models vs legacy source (facts) / track row-count trends (dims), rolled up into a daily append-only log |
+| 6 | Post-hook hard-delete | `post_hook` `DELETE FROM {{ this }}` joined to a `*_deleted` tracking model | Remove fact rows whose source record was hard-deleted, which incremental filters can't detect |
+| 7 | Required `etl_date` column | Every fact model's `SELECT` list | Own incremental watermark, and the watermark downstream facts filter on when consuming this fact as a source |
+| 8 | Audit tables | `models/audit/audit_fact_*.sql`, `audit_fact_edna.sql`, `audit_dim_edna.sql` | Reconcile new models vs legacy source (facts) / track row-count trends (dims), rolled up into a daily append-only log |
