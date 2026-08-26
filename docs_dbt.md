@@ -234,6 +234,110 @@ Key points:
 
 ---
 
+## 7. Audit tables (`models/audit/audit_fact_edna.sql` & `models/audit/audit_dim_edna.sql`)
+
+Separate from the fact/dim models themselves, `models/audit/` holds a data-quality layer that continuously checks the new dbt models against expectations (or against the legacy tables they replaced). There are two levels: per-model audit checks, and two roll-up models that aggregate all of them into a single daily audit log.
+
+### Per-model audit checks (facts)
+
+Each fact table that's been migrated from a legacy pipeline gets its own `audit_fact_<name>.sql` model, built entirely around the `audit_helper.compare_queries` macro from the `dbt-labs/audit_helper` package (declared in `packages.yml`). It compares an "old" query (legacy/raw source) against a "new" query (the new dbt fact model) row-by-row on a primary key, and returns any rows that differ.
+
+Example — `models/audit/audit_fact_order_evermos.sql`:
+
+```sql
+{% set old_query %}
+    select order_detail_id, gross_gmv
+    from dbt.dbt_prod.order_detail_evm
+    where created_at::date >= {{ var('dbt_audit_start_date') }}
+    and created_at::date <= (current_timestamp - interval '1 day')::date
+{% endset %}
+
+{% set new_query %}
+    select order_detail_id, gross_gmv
+    from {{ ref('fact_order_evermos') }}
+    where created_at::date >= {{ var('dbt_audit_start_date') }}
+    and created_at::date <= (current_timestamp - interval '1 day')::date
+{% endset %}
+
+{{
+    audit_helper.compare_queries(
+        a_query = old_query,
+        b_query = new_query,
+        primary_key = 'order_detail_id',
+        summarize = false,
+        limit = 30
+    )
+}}
+```
+
+`models/audit/audit_fact_finance_ap.sql` uses the same shape but compares a legacy-equivalent `UNION ALL` of `fact_order_evermos` + `fact_order_berikhtiar` against the new `fact_finance_ap`, keyed on a `dbt_utils.generate_surrogate_key`-derived `unique_key` — showing the pattern also works to reconcile a many-to-one consolidation, not just a 1:1 legacy replacement.
+
+Key points:
+
+- `a_query`/`b_query` should select the **same columns on the same grain**, scoped to the same date window (`dbt_audit_start_date` var to `yesterday`, so today's still-loading data isn't flagged as a false discrepancy).
+- `summarize = false` returns the actual mismatched rows (capped by `limit`) rather than just a summary count — useful for local debugging, and it's what makes `COUNT(*) > 0` in the roll-up (below) meaningful as a discrepancy flag.
+- This is a reconciliation check, not a general data test — it's specifically for validating a new/rebuilt fact model still agrees with its predecessor (or an equivalent independently-derived source) on values that must match.
+
+### Roll-up audit models (`audit_fact_edna` / `audit_dim_edna`)
+
+`audit_fact_edna.sql` and `audit_dim_edna.sql` are daily summary models that loop over a Jinja list of the individual audit checks / dim snapshots and union their results into one table, so audit status for every model can be monitored/alerted on from a single place.
+
+```sql
+{{
+    config(
+        materialized='incremental',
+        incremental_strategy='append',
+        tags = ['audit_edna'],
+        pre_hook = [
+            """
+            {% if is_incremental() %}
+            DELETE FROM {{ this }}
+            WHERE audit_date = (CURRENT_TIMESTAMP + INTERVAL '7 hours')::DATE
+            {% endif %}
+            """
+        ]
+    )
+}}
+
+{% set table_list = ['audit_fact_everbayar_payment_detail', ..., 'audit_fact_finance_ap'] %}
+
+WITH
+{% for table_name in table_list %}
+    {{ table_name }}_CTE AS (
+        SELECT
+            (CURRENT_TIMESTAMP + INTERVAL '7 hours')::DATE AS audit_date,
+            CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END AS is_discrepancy,
+            '{{ table_name }}' AS table_name
+        FROM {{ ref(table_name) }}
+    ),
+{% endfor %}
+...
+```
+
+`audit_dim_edna.sql` follows the identical `config`/`pre_hook`/loop skeleton, but since dim snapshots don't have an `audit_helper.compare_queries` model to check, it instead aggregates row counts directly off each `dim_*` snapshot:
+
+```sql
+{% set table_list = ['dim_evermos_user', 'dim_evermos_brand', ...] %}
+
+{{ table_name }}_CTE AS (
+    SELECT
+        (CURRENT_TIMESTAMP + INTERVAL '7 hours')::DATE AS audit_date,
+        SUM(CASE WHEN dbt_valid_to IS NULL THEN 1 ELSE NULL END) AS active_rows,
+        COUNT(*) AS total_rows,
+        '{{ table_name }}' AS table_name
+    FROM {{ ref(table_name) }}
+),
+```
+
+Key points:
+
+- **`materialized='incremental'` + `incremental_strategy='append'` + a `pre_hook` that deletes today's `audit_date` rows first** is the "append-only log, but idempotent per day" pattern: re-running the model the same day replaces today's entry instead of duplicating it, while all prior days' history is preserved (unlike `delete+insert`, which would require a `unique_key` and wouldn't fit a table meant to accumulate a daily time series).
+- `audit_fact_edna` reduces each `audit_fact_*` model's result set down to a single boolean-ish `is_discrepancy` flag (`1` if `compare_queries` returned any mismatched rows, `0` otherwise) — cheap to alert on without needing to inspect row-level detail from the log table itself.
+- `audit_dim_edna` instead tracks `active_rows` (current, `dbt_valid_to IS NULL`) vs `total_rows` (all history) per dim snapshot over time — a trend/volume check (e.g. catching an active-row count that suddenly drops to zero, or unbounded snapshot growth) rather than a value-correctness check, since dim snapshots don't have a "legacy source" to reconcile against the way migrated facts do.
+- Both are driven by a `{% set table_list = [...] %}` + `{% for %}` Jinja loop building one `_CTE` per entry and `UNION ALL`-ing them together — adding a new fact/dim to be audited is just appending its `ref()`-able name to the corresponding list, no other model changes needed.
+
+---
+
 ## Summary table
 
 | # | Pattern | Where | Purpose |
@@ -244,3 +348,4 @@ Key points:
 | 4 | Incremental w/ 1-day offset | `MAX(etl_date) - INTERVAL '1 day'` filter on every source | Re-scan a 1-day buffer to catch late-arriving/updated rows |
 | 5 | Incremental population CTE | `*_population` CTE unioning direct + related-entity changes | Catch fact-grain changes triggered by a related/child entity, not just the base table |
 | 6 | Required `etl_date` column | Every fact model's `SELECT` list | Own incremental watermark, and the watermark downstream facts filter on when consuming this fact as a source |
+| 7 | Audit tables | `models/audit/audit_fact_*.sql`, `audit_fact_edna.sql`, `audit_dim_edna.sql` | Reconcile new models vs legacy source (facts) / track row-count trends (dims), rolled up into a daily append-only log |
